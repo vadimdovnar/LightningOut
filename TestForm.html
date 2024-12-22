@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!-- <!DOCTYPE html>
 <html>
 <head>
     <title>LWC with Lightning Out</title>
@@ -19,4 +19,29 @@
         }, "https://twistellarsandbox3-dev-ed.develop.my.salesforce.com");
     </script>
 </body>
+</html> -->
+
+<html>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <script src="https://mindful-badger-l7496e-dev-ed.trailblaze.my.salesforce-sites.com/TestLghtningOutSite/lightning/lightning.out.js"></script>
+
+    <div data-lightning-out="true"></div>
+
+    <script>
+        const appName = 'c:myLightningApp';
+        const componentName = 'c:myFormComponent';
+        const lightningEndpoint = 'https://mindful-badger-l7496e-dev-ed.trailblaze.my.salesforce-sites.com/TestLghtningOutSite';
+        const targetElement = document.querySelector('[data-lightning-out]');
+        const componentAttributes = {};
+
+        $Lightning.use(
+            appName,
+            function (cmp) {
+                $Lightning.createComponent(componentName, componentAttributes, targetElement, function () {
+                    console.log('lightning component created');
+                });
+            },
+            lightningEndpoint
+        );
+    </script>
 </html>
