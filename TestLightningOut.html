@@ -1,0 +1,24 @@
+<html>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <script src="https://snoonu--dv.sandbox.my.salesforce-sites.com/LightningOutCase/lightning/lightning.out.js"></script>
+
+    <div data-lightning-out="true"></div>
+
+    <script>
+        const appName = 'c:lightningAuraWrapper';
+        const componentName = 'c:caseCreationForm';
+        const lightningEndpoint = 'https://snoonu--dv.sandbox.my.salesforce-sites.com/LightningOutCase';
+        const targetElement = document.querySelector('[data-lightning-out]');
+        const componentAttributes = {};
+
+        $Lightning.use(
+            appName,
+            function (cmp) {
+                $Lightning.createComponent(componentName, componentAttributes, targetElement, function () {
+                    console.log('lightning component created');
+                });
+            },
+            lightningEndpoint
+        );
+    </script>
+</html>
