@@ -15,7 +15,7 @@
     src="https://snoonu--dv.sandbox.my.salesforce.com/lightning/lightning.out.latest/index.iife.prod.js"
   ></script>
 
-  <!-- 2) LO2 app (frontdoor-url будет проставлен JS-ом) -->
+  <!-- 2) LO2 app -->
   <lightning-out-application
     id="loApp"
     app-id="1UsO20000000Bl3KAE"
@@ -31,7 +31,7 @@
     const MY_DOMAIN = "https://snoonu--dv.sandbox.my.salesforce.com";
     const CLIENT_ID = "3MVG9RfdU0uTjsG2USrtpu3HuGQOJLSl1yUJmMPK4v84KeHVpedjc0nLlSDEQBAA7fuikBz8IZz2EmS3zgI6X";
     const REDIRECT_URI = window.location.origin + window.location.pathname;
-    const SCOPE = "web"; // или "full" для теста
+    const SCOPE = "web";
 
     const logEl = document.getElementById("log");
     const log = (...args) => { logEl.textContent += args.join(" ") + "\n"; };
@@ -62,6 +62,10 @@
       return new URLSearchParams(window.location.search).get(name);
     }
 
+    function stripQueryParams() {
+      window.history.replaceState({}, document.title, REDIRECT_URI);
+    }
+
     async function startOAuthPkce() {
       const verifier = randomString(64);
       sessionStorage.setItem("pkce_verifier", verifier);
@@ -72,7 +76,6 @@
       authUrl.searchParams.set("client_id", CLIENT_ID);
       authUrl.searchParams.set("redirect_uri", REDIRECT_URI);
       authUrl.searchParams.set("scope", SCOPE);
-
       authUrl.searchParams.set("code_challenge", challenge);
       authUrl.searchParams.set("code_challenge_method", "S256");
 
@@ -105,39 +108,44 @@
       return resp.json(); // { access_token, instance_url, ... }
     }
 
-    async function exchangeTokenForFrontdoor(accessToken) {
-      // UI Bridge singleaccess: POST access token -> get frontdoor url (frontdoor_uri)
-      // Документация: /services/oauth2/singleaccess возвращает frontdoor URL :contentReference[oaicite:3]{index=3}
-      const resp = await fetch(MY_DOMAIN + "/services/oauth2/singleaccess", {
-        method: "POST",
-        headers: {
-          "Authorization": "Bearer " + accessToken,
-          "Content-Type": "application/x-www-form-urlencoded"
-        },
-        // redirect_uri обязателен: куда "бриджиться" внутри UI
-        body: new URLSearchParams({ redirect_uri: "/" })
-      });
+    // IMPORTANT: /singleaccess doesn't send CORS headers reliably, even with CORS allowlist.
+    // So we avoid fetch() and instead navigate the browser (top-level redirect), which bypasses CORS.
+    function redirectToSingleAccess(accessToken) {
+      // Keep token in sessionStorage just for this test flow.
+      sessionStorage.setItem("sf_access_token", accessToken);
 
-      if (!resp.ok) {
-        const t = await resp.text();
-        throw new Error("singleaccess failed: " + resp.status + " " + t);
-      }
+      // We'll come back to this same page with state=singleaccess
+      const returnTo = new URL(REDIRECT_URI);
+      returnTo.searchParams.set("state", "singleaccess");
 
-      const data = await resp.json();
-      if (!data.frontdoor_uri) throw new Error("singleaccess: no frontdoor_uri in response");
-      return data.frontdoor_uri;
+      const url = new URL(MY_DOMAIN + "/services/oauth2/singleaccess");
+      // Some orgs accept access_token in query for this flow; if yours doesn't, it will show an error page.
+      url.searchParams.set("access_token", accessToken);
+      url.searchParams.set("redirect_uri", returnTo.toString());
+
+      log("Redirecting to singleaccess...");
+      window.location.href = url.toString();
     }
 
-    async function initLightningOut(frontdoorUrl) {
-      const loApp = document.getElementById("loApp");
+    async function waitForLo2Script() {
+      await new Promise((res, rej) => {
+        const s = document.getElementById("lo2script");
+        if (s && s.readyState === "complete") return res();
+        s.onload = () => res();
+        s.onerror = () => rej(new Error("Failed to load LO2 script"));
+      });
+    }
 
+    function initLightningOutWithoutFrontdoor() {
+      const loApp = document.getElementById("loApp");
       loApp.addEventListener("lo.application.ready", () => log("LO2: application ready ✅"));
       loApp.addEventListener("lo.application.error", (e) => {
         log("LO2: application error ❌", e?.detail?.message || "", e?.detail?.originalError || "");
       });
 
-      loApp.setAttribute("frontdoor-url", frontdoorUrl);
-      log("frontdoor-url set");
+      // After singleaccess, SF session should be established in the iframe context.
+      // We do NOT set frontdoor-url here.
+      log("Starting LO2 (no frontdoor-url; session established via singleaccess)...");
     }
 
     (async () => {
@@ -146,9 +154,19 @@
         const errDesc = getQueryParam("error_description");
         if (err) throw new Error(`OAuth error: ${err} ${errDesc || ""}`);
 
+        const state = getQueryParam("state");
+
+        // If we returned from singleaccess, just start LO2.
+        if (state === "singleaccess") {
+          stripQueryParams();
+          await waitForLo2Script();
+          log("Returned from singleaccess ✅");
+          initLightningOutWithoutFrontdoor();
+          return;
+        }
+
         const code = getQueryParam("code");
         if (!code) {
-          // First visit -> start OAuth
           await startOAuthPkce();
           return;
         }
@@ -157,22 +175,11 @@
         const token = await exchangeCodeForToken(code);
         log("Got access token ✅");
 
-        log("Exchanging token for frontdoor URL...");
-        const frontdoor = await exchangeTokenForFrontdoor(token.access_token);
-        log("Got frontdoor URL ✅");
+        // remove ?code=... from URL before continuing
+        stripQueryParams();
 
-        // Cleanup querystring (чтобы не оставлять code в URL)
-        window.history.replaceState({}, document.title, REDIRECT_URI);
-
-        // wait for LO2 script loaded
-        await new Promise((res, rej) => {
-          const s = document.getElementById("lo2script");
-          if (s && s.readyState === "complete") return res();
-          s.onload = () => res();
-          s.onerror = () => rej(new Error("Failed to load LO2 script"));
-        });
-
-        await initLightningOut(frontdoor);
+        // Instead of fetch(singleaccess) -> CORS error, we redirect:
+        redirectToSingleAccess(token.access_token);
       } catch (e) {
         log("ERROR:", e.message || e);
         console.error(e);
