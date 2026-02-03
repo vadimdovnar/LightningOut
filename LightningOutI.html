@@ -28,163 +28,168 @@
   <pre id="log"></pre>
 
   <script>
-    const MY_DOMAIN = "https://snoonu--dv.sandbox.my.salesforce.com";
-    const CLIENT_ID = "3MVG9RfdU0uTjsG2USrtpu3HuGQOJLSl1yUJmMPK4v84KeHVpedjc0nLlSDEQBAA7fuikBz8IZz2EmS3zgI6X";
-    const REDIRECT_URI = window.location.origin + window.location.pathname;
-    const SCOPE = "web";
+  const MY_DOMAIN = "https://snoonu--dv.sandbox.my.salesforce.com";
+  const CLIENT_ID = "3MVG9RfdU0uTjsG2USrtpu3HuGQOJLSl1yUJmMPK4v84KeHVpedjc0nLlSDEQBAA7fuikBz8IZz2EmS3zgI6X";
+  const REDIRECT_URI = window.location.origin + window.location.pathname;
+  const SCOPE = "web";
 
-    const logEl = document.getElementById("log");
-    const log = (...args) => { logEl.textContent += args.join(" ") + "\n"; };
+  const logEl = document.getElementById("log");
+  const log = (...args) => { logEl.textContent += args.join(" ") + "\n"; };
 
-    // --- PKCE helpers ---
-    function base64UrlEncode(arrayBuffer) {
-      const bytes = new Uint8Array(arrayBuffer);
-      let str = "";
-      for (const b of bytes) str += String.fromCharCode(b);
-      return btoa(str).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  // --- helpers ---
+  function base64UrlEncode(arrayBuffer) {
+    const bytes = new Uint8Array(arrayBuffer);
+    let str = "";
+    for (const b of bytes) str += String.fromCharCode(b);
+    return btoa(str).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+
+  async function sha256(str) {
+    const enc = new TextEncoder().encode(str);
+    return crypto.subtle.digest("SHA-256", enc);
+  }
+
+  function randomString(len = 64) {
+    const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
+    let out = "";
+    const bytes = new Uint8Array(len);
+    crypto.getRandomValues(bytes);
+    for (let i = 0; i < len; i++) out += charset[bytes[i] % charset.length];
+    return out;
+  }
+
+  function getQueryParam(name) {
+    return new URLSearchParams(window.location.search).get(name);
+  }
+
+  function stripQueryParams() {
+    window.history.replaceState({}, document.title, REDIRECT_URI);
+  }
+
+  // Use localStorage so verifier survives redirects reliably
+  const PKCE_VERIFIER_KEY = "lo2_pkce_verifier";
+  const OAUTH_STATE_KEY = "lo2_oauth_state";
+
+  async function startOAuthPkce() {
+    const verifier = randomString(64);
+    localStorage.setItem(PKCE_VERIFIER_KEY, verifier);
+
+    const challenge = base64UrlEncode(await sha256(verifier));
+    const state = randomString(24);
+    localStorage.setItem(OAUTH_STATE_KEY, state);
+
+    const authUrl = new URL(MY_DOMAIN + "/services/oauth2/authorize");
+    authUrl.searchParams.set("response_type", "code");
+    authUrl.searchParams.set("client_id", CLIENT_ID);
+    authUrl.searchParams.set("redirect_uri", REDIRECT_URI);
+    authUrl.searchParams.set("scope", SCOPE);
+
+    authUrl.searchParams.set("code_challenge", challenge);
+    authUrl.searchParams.set("code_challenge_method", "S256");
+    authUrl.searchParams.set("state", state);
+
+    log("Redirecting to OAuth authorize...");
+    window.location.href = authUrl.toString();
+  }
+
+  async function exchangeCodeForToken(code) {
+    const verifier = localStorage.getItem(PKCE_VERIFIER_KEY);
+    if (!verifier) throw new Error("Missing PKCE verifier (localStorage)");
+
+    const body = new URLSearchParams();
+    body.set("grant_type", "authorization_code");
+    body.set("client_id", CLIENT_ID);
+    body.set("redirect_uri", REDIRECT_URI);
+    body.set("code", code);
+    body.set("code_verifier", verifier);
+
+    const resp = await fetch(MY_DOMAIN + "/services/oauth2/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body
+    });
+
+    if (!resp.ok) {
+      const t = await resp.text();
+      throw new Error("Token exchange failed: " + resp.status + " " + t);
     }
 
-    async function sha256(str) {
-      const enc = new TextEncoder().encode(str);
-      return crypto.subtle.digest("SHA-256", enc);
-    }
+    return resp.json();
+  }
 
-    function randomString(len = 64) {
-      const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
-      let out = "";
-      const bytes = new Uint8Array(len);
-      crypto.getRandomValues(bytes);
-      for (let i = 0; i < len; i++) out += charset[bytes[i] % charset.length];
-      return out;
-    }
+  function redirectToSingleAccess(accessToken) {
+    // for test only
+    localStorage.setItem("lo2_access_token", accessToken);
 
-    function getQueryParam(name) {
-      return new URLSearchParams(window.location.search).get(name);
-    }
+    const returnTo = new URL(REDIRECT_URI);
+    returnTo.searchParams.set("state", "singleaccess");
 
-    function stripQueryParams() {
-      window.history.replaceState({}, document.title, REDIRECT_URI);
-    }
+    const url = new URL(MY_DOMAIN + "/services/oauth2/singleaccess");
+    url.searchParams.set("access_token", accessToken);
+    url.searchParams.set("redirect_uri", returnTo.toString());
 
-    async function startOAuthPkce() {
-      const verifier = randomString(64);
-      sessionStorage.setItem("pkce_verifier", verifier);
-      const challenge = base64UrlEncode(await sha256(verifier));
+    log("Redirecting to singleaccess...");
+    window.location.href = url.toString();
+  }
 
-      const authUrl = new URL(MY_DOMAIN + "/services/oauth2/authorize");
-      authUrl.searchParams.set("response_type", "code");
-      authUrl.searchParams.set("client_id", CLIENT_ID);
-      authUrl.searchParams.set("redirect_uri", REDIRECT_URI);
-      authUrl.searchParams.set("scope", SCOPE);
-      authUrl.searchParams.set("code_challenge", challenge);
-      authUrl.searchParams.set("code_challenge_method", "S256");
+  async function waitForLo2Script() {
+    await new Promise((res, rej) => {
+      const s = document.getElementById("lo2script");
+      if (s && s.readyState === "complete") return res();
+      s.onload = () => res();
+      s.onerror = () => rej(new Error("Failed to load LO2 script"));
+    });
+  }
 
-      log("Redirecting to OAuth authorize...");
-      window.location.href = authUrl.toString();
-    }
+  function initLightningOut() {
+    const loApp = document.getElementById("loApp");
+    loApp.addEventListener("lo.application.ready", () => log("LO2: application ready ✅"));
+    loApp.addEventListener("lo.application.error", (e) => {
+      log("LO2: application error ❌", e?.detail?.message || "", e?.detail?.originalError || "");
+    });
+    log("Starting LO2...");
+  }
 
-    async function exchangeCodeForToken(code) {
-      const verifier = sessionStorage.getItem("pkce_verifier");
-      if (!verifier) throw new Error("Missing PKCE verifier in sessionStorage");
+  (async () => {
+    try {
+      const err = getQueryParam("error");
+      const errDesc = getQueryParam("error_description");
+      if (err) throw new Error(`OAuth error: ${err} ${errDesc || ""}`);
 
-      const body = new URLSearchParams();
-      body.set("grant_type", "authorization_code");
-      body.set("client_id", CLIENT_ID);
-      body.set("redirect_uri", REDIRECT_URI);
-      body.set("code", code);
-      body.set("code_verifier", verifier);
+      const state = getQueryParam("state");
 
-      const resp = await fetch(MY_DOMAIN + "/services/oauth2/token", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body
-      });
-
-      if (!resp.ok) {
-        const t = await resp.text();
-        throw new Error("Token exchange failed: " + resp.status + " " + t);
-      }
-
-      return resp.json(); // { access_token, instance_url, ... }
-    }
-
-    // IMPORTANT: /singleaccess doesn't send CORS headers reliably, even with CORS allowlist.
-    // So we avoid fetch() and instead navigate the browser (top-level redirect), which bypasses CORS.
-    function redirectToSingleAccess(accessToken) {
-      // Keep token in sessionStorage just for this test flow.
-      sessionStorage.setItem("sf_access_token", accessToken);
-
-      // We'll come back to this same page with state=singleaccess
-      const returnTo = new URL(REDIRECT_URI);
-      returnTo.searchParams.set("state", "singleaccess");
-
-      const url = new URL(MY_DOMAIN + "/services/oauth2/singleaccess");
-      // Some orgs accept access_token in query for this flow; if yours doesn't, it will show an error page.
-      url.searchParams.set("access_token", accessToken);
-      url.searchParams.set("redirect_uri", returnTo.toString());
-
-      log("Redirecting to singleaccess...");
-      window.location.href = url.toString();
-    }
-
-    async function waitForLo2Script() {
-      await new Promise((res, rej) => {
-        const s = document.getElementById("lo2script");
-        if (s && s.readyState === "complete") return res();
-        s.onload = () => res();
-        s.onerror = () => rej(new Error("Failed to load LO2 script"));
-      });
-    }
-
-    function initLightningOutWithoutFrontdoor() {
-      const loApp = document.getElementById("loApp");
-      loApp.addEventListener("lo.application.ready", () => log("LO2: application ready ✅"));
-      loApp.addEventListener("lo.application.error", (e) => {
-        log("LO2: application error ❌", e?.detail?.message || "", e?.detail?.originalError || "");
-      });
-
-      // After singleaccess, SF session should be established in the iframe context.
-      // We do NOT set frontdoor-url here.
-      log("Starting LO2 (no frontdoor-url; session established via singleaccess)...");
-    }
-
-    (async () => {
-      try {
-        const err = getQueryParam("error");
-        const errDesc = getQueryParam("error_description");
-        if (err) throw new Error(`OAuth error: ${err} ${errDesc || ""}`);
-
-        const state = getQueryParam("state");
-
-        // If we returned from singleaccess, just start LO2.
-        if (state === "singleaccess") {
-          stripQueryParams();
-          await waitForLo2Script();
-          log("Returned from singleaccess ✅");
-          initLightningOutWithoutFrontdoor();
-          return;
-        }
-
-        const code = getQueryParam("code");
-        if (!code) {
-          await startOAuthPkce();
-          return;
-        }
-
-        log("Got OAuth code, exchanging for token...");
-        const token = await exchangeCodeForToken(code);
-        log("Got access token ✅");
-
-        // remove ?code=... from URL before continuing
+      if (state === "singleaccess") {
         stripQueryParams();
-
-        // Instead of fetch(singleaccess) -> CORS error, we redirect:
-        redirectToSingleAccess(token.access_token);
-      } catch (e) {
-        log("ERROR:", e.message || e);
-        console.error(e);
+        await waitForLo2Script();
+        log("Returned from singleaccess ✅");
+        initLightningOut();
+        return;
       }
-    })();
-  </script>
+
+      const code = getQueryParam("code");
+      if (!code) {
+        await startOAuthPkce();
+        return;
+      }
+
+      // Validate oauth state (optional but good)
+      const expectedState = localStorage.getItem(OAUTH_STATE_KEY);
+      const returnedState = getQueryParam("state");
+      if (expectedState && returnedState && expectedState !== returnedState) {
+        throw new Error("OAuth state mismatch");
+      }
+
+      log("Got OAuth code, exchanging for token...");
+      const token = await exchangeCodeForToken(code);
+      log("Got access token ✅");
+
+      stripQueryParams();
+      redirectToSingleAccess(token.access_token);
+    } catch (e) {
+      log("ERROR:", e.message || e);
+      console.error(e);
+    }
+  })();
+</script>
 </body>
 </html>
